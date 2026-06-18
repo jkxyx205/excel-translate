@@ -101,7 +101,14 @@ if __name__ == "__main__":
     # print_translate(path)
 
     # 大模型翻译，提示词：将 @1.txt 的文本由中文翻译成英文，存储到 2.txt 文件中
-    
+
     # 替换 Excel 中的文本
     excel_cell_replace("./1.txt", "./2.txt", path)
     print('Completed')
+
+    # 注意
+    """
+    UserWarning: wmf image format is not supported so the image is being dropped warn(msg)
+    1. 有些图片会丢失，每个 sheet 都校对一下
+    2. 图片的文字无法翻译
+    """

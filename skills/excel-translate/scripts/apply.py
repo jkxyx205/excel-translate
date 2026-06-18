@@ -31,8 +31,12 @@ def build_escaped_map(translate_map: dict) -> dict:
 def replace_t_text(xml_text: str, escaped_map: dict) -> str:
     def repl(m):
         open_tag, content, close_tag = m.group(1), m.group(2), m.group(3)
-        if content in escaped_map:
-            return open_tag + escaped_map[content] + close_tag
+        # Normalize CRLF/CR -> LF before lookup. openpyxl normalizes line
+        # endings on read (XML spec 2.11), so keys in escaped_map use LF,
+        # but the raw XML bytes we match against here may still be CRLF.
+        normalized = content.replace('\r\n', '\n').replace('\r', '\n')
+        if normalized in escaped_map:
+            return open_tag + escaped_map[normalized] + close_tag
         return m.group(0)
     return _T_PATTERN.sub(repl, xml_text)
 

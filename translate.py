@@ -21,13 +21,16 @@ def translate_excel(path: str):
 
   return texts
 
+separator = '======'
+
 def print_translate(path: str):
     texts = translate_excel(path)
     for text in sorted(texts):
-        print(text)
-        print('======')
-
-separator = '======'
+        # text + 换行 + separator 保存到 1.txt 文件中
+        with open("1.txt", "a") as f:
+            f.write(text + "\n" + separator + "\n")
+        # print(text)
+        # print(separator)
 
 def loadData(path: str):
     with open(path, 'r') as f:
@@ -94,10 +97,11 @@ def excel_cell_replace(source_path: str, target_path: str, path: str):
 
 if __name__ == "__main__":
     path = "./excel/translate.xlsx"
-    
-    # 获取翻译的 excel 文本，复制到 1.txt 中
+    # 获取翻译的 excel 文本到 1.txt 中
     # print_translate(path)
+
     # 大模型翻译，提示词：将 @1.txt 的文本由中文翻译成英文，存储到 2.txt 文件中
-    # target_map = loadData("./2.txt")
+    
+    # 替换 Excel 中的文本
     excel_cell_replace("./1.txt", "./2.txt", path)
     print('Completed')

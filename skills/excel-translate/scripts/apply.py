@@ -21,7 +21,7 @@ import zipfile
 
 
 _T_PATTERN = re.compile(r'(<t(?:\s[^>]*)?>)([^<>]*)(</t>)')
-
+_SHEET_NAME_PATTERN = re.compile(r'(<sheet\b[^>]*?\sname=")([^"]*)(")')
 
 def build_escaped_map(translate_map: dict) -> dict:
     return {html.escape(k, quote=False): html.escape(v, quote=False)
@@ -36,20 +36,26 @@ def replace_t_text(xml_text: str, escaped_map: dict) -> str:
         #   2) strip() leading/trailing whitespace (extract does cell.value.strip())
         # Raw XML <t> content may carry either, so the key (built from stripped
         # cell values) would otherwise miss.
-        normalized = content.replace('\r\n', '\n').replace('\r', '\n').strip()
+        normalized = _normalize(content)
         if normalized in escaped_map:
             return open_tag + escaped_map[normalized] + close_tag
         return m.group(0)
     return _T_PATTERN.sub(repl, xml_text)
 
+def _normalize(content: str) -> str:
+    return content.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+def replace_sheet_names(xml_text: str, escaped_map: dict) -> str:
+    def repl(m):
+        prefix, content, suffix = m.group(1), m.group(2), m.group(3)
+        normalized = _normalize(content)
+        if normalized in escaped_map:
+            return prefix + escaped_map[normalized] + suffix
+        return m.group(0)
+    return _SHEET_NAME_PATTERN.sub(repl, xml_text)
 
 def main():
-    if len(sys.argv) != 4:
-        print("Usage: python apply.py <input.xlsx> <translations.json> <output.xlsx>",
-              file=sys.stderr)
-        sys.exit(1)
-
-    input_path, translations_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    input_path, translations_path, output_path = "/Users/rick/Space/Share/translate-test/TRANSLATE.xlsx", "/Users/rick/Space/Share/translate-test/translations.json", "/Users/rick/Space/Share/translate-test/TRANSLATE-tt.xlsx"
 
     with open(translations_path, "r", encoding="utf-8") as f:
         translate_map = json.load(f)
@@ -64,9 +70,15 @@ def main():
             is_strings = item.filename == "xl/sharedStrings.xml"
             is_sheet = (item.filename.startswith("xl/worksheets/")
                         and item.filename.endswith(".xml"))
+            is_workbook = item.filename == "xl/workbook.xml"
+            
             if is_strings or is_sheet:
                 text = data.decode("utf-8")
                 text = replace_t_text(text, escaped_map)
+                data = text.encode("utf-8")
+            elif is_workbook:
+                text = data.decode("utf-8")
+                text = replace_sheet_names(text, escaped_map)
                 data = text.encode("utf-8")
             zout.writestr(item, data)
 

@@ -18,6 +18,10 @@ def extract_unique_texts(path: str) -> list[str]:
     texts: set[str] = set()
 
     for sheet in wb.worksheets:
+      # 添加 sheet 名称到 texts 集合中
+      if sheet.title:
+        texts.add(sheet.title)
+
         for row in sheet.iter_rows():
             for cell in row:
                 if isinstance(cell.value, str):

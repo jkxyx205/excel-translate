@@ -137,13 +137,13 @@ def excel_cell_replace(source_path: str, target_path: str, path: str):
 
 if __name__ == "__main__":
     path = "./excel/translate.xlsx"
-    # 获取翻译的 excel 文本到 1.txt 中
-    print_translate(path)
+    # 1. 获取翻译的 excel 文本到 1.txt 中
+    # print_translate(path)
 
-    # 大模型翻译，提示词：将 @1.txt 的文本由中文翻译成英文，存储到 2.txt 文件中
+    # 2. 大模型翻译，提示词：将 @1.txt 的文本由中文翻译成英文，存储到 2.txt 文件中
 
-    # 替换 Excel 中的文本
-    # excel_cell_replace("./1.txt", "./2.txt", path)
+    # 3. 替换 Excel 中的文本
+    excel_cell_replace("./1.txt", "./2.txt", path)
     print('Completed')
 
     # 注意：图片中的文字无法翻译

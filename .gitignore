@@ -3,3 +3,4 @@ excel
 .DS_Store
 *.xlsx
 __pycache__
+*.json

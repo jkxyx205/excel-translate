@@ -21,7 +21,7 @@
     # 1. 获取翻译的 excel 文本到 1.txt 中
     print_translate(path)
 ```
-### 2. 大模型翻译，提示词：将 @1.txt 的文本由中文翻译成英文，存储到 2.txt 文件中
+### 2. 大模型翻译，提示词：将 @translate.json 中的 key 由中文翻译成英文，翻译结果写入对应的 value
 ### 3. Excel 翻译替换
 ```python
     # 3. 替换 Excel 中的文本

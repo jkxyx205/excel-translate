@@ -40,8 +40,8 @@ def print_translate(json_path: str, path: str):
         f.write('{')
         for text in sorted(texts):
             # 生成 JSON 格式的键值对。key 和 value 都是 text，key 可能会「换行」 或者出现「双引号」
-            key = f'"{text.replace('\n', '\\n').replace("\"", "\\\"")}": ""'
-            f.write(key)  
+            key = f'{json.dumps(text)}: ""'
+            f.write(key)
             # 是否是最后一个元素
             if text != sorted(texts)[-1]:
                 f.write(',')
@@ -180,10 +180,10 @@ def excel_cell_replace(translate_path: str, path: str):
             zout.writestr(item, data)
 
 if __name__ == "__main__":
-    path = "./excel/TV83有刷TV83S无刷SOP-1.xlsx"
+    path = "./excel/Dongtai- Rechargeable air blow.xlsx"
     json_path = "translate.json"
 
-    # 1. 获取翻译的 excel 文本到 1.txt 中
+    # 1. 获取翻译的 excel 文本到 translate.json 中
     # print_translate(json_path, path)
 
     # 2. 大模型翻译，claude --dangerously-skip-permissions 提示词：将 @translate.json 中的 key 由中文翻译成英文，翻译结果写入 key 对应的 value 中;

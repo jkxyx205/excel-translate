@@ -34,20 +34,45 @@ def translate_excel(path: str):
 
   return texts
 
+def translate_word(path: str):
+  """
+    Extract all unique text values from a .docx at the zip/XML level.
+    按 <w:t> run 边界提取，替换时同样以 <w:t> 为单位，从而完整保留
+    段落、样式、图片、域等结构（不做 run 合并，避免破坏格式）。
+  """
+  texts = set()
+  with zipfile.ZipFile(path, "r") as z:
+      for info in z.infolist():
+          name = info.filename
+          if not name.startswith("word/") or not name.endswith(".xml"):
+              continue
+          base = name[len("word/"):]
+          # 只处理承载正文/页眉/页脚/脚注/尾注文本的部件，避免改动设置等部件
+          if not (base == "document.xml"
+                  or base.startswith(("header", "footer", "footnotes", "endnotes"))):
+              continue
+          xml_text = z.read(name).decode("utf-8", errors="ignore")
+          for m in _W_T_PATTERN.finditer(xml_text):
+              norm = _normalize(html.unescape(m.group(2)))
+              if norm:
+                  texts.add(norm)
+  return texts
+
 # separator = '======'
 
-def print_translate(json_path: str, path: str):
-    texts = translate_excel(path)
+def write_translate_json(json_path: str, texts: set):
+    """把唯一文本集合写成 {原文: ""} 的 JSON，供大模型填充 value。"""
+    ordered = sorted(texts)
     with open(json_path, "w", encoding="utf-8") as f:
         f.write('{')
-        for text in sorted(texts):
-            # 生成 JSON 格式的键值对。key 和 value 都是 text，key 可能会「换行」 或者出现「双引号」
-            key = f'{json.dumps(text)}: ""'
-            f.write(key)
-            # 是否是最后一个元素
-            if text != sorted(texts)[-1]:
+        for i, text in enumerate(ordered):
+            f.write(f'{json.dumps(text)}: ""')
+            if i < len(ordered) - 1:
                 f.write(',')
         f.write('}')
+
+def print_translate(json_path: str, path: str):
+    write_translate_json(json_path, translate_excel(path))
 
 def translator(json_file: str, src: str, dest: str):
     """
@@ -86,6 +111,8 @@ def translator(json_file: str, src: str, dest: str):
 
 _T_PATTERN = re.compile(r'(<t(?:\s[^>]*)?>)([^<>]*)(</t>)')
 _SHEET_NAME_PATTERN = re.compile(r'(<sheet\b[^>]*?\sname=")([^"]*)(")')
+# Word 正文文本运行：<w:t>...</w:t>（含 <w:t xml:space="preserve">...</w:t>）
+_W_T_PATTERN = re.compile(r'(<w:t(?:\s[^>]*)?>)([^<>]*)(</w:t>)')
 # 匹配 JSON 对象里「key 缺少 : value」的残缺条目：键后直接是 , 或 }
 #   ..."key",  → ..."key": "key",
 # 只匹配键位置（前驱是 { 或 ,），不会误伤值（值前驱是 :）。
@@ -189,6 +216,17 @@ def replace_sheet_names(xml_text: str, escaped_map: dict) -> str:
     return _SHEET_NAME_PATTERN.sub(repl, xml_text)
 
 
+def replace_w_t_text(xml_text: str, escaped_map: dict) -> str:
+    """替换 Word 的 <w:t> 文本，保留外层 run 的所有格式属性。"""
+    def repl(m):
+        open_tag, content, close_tag = m.group(1), m.group(2), m.group(3)
+        normalized = _normalize(content)
+        if normalized in escaped_map:
+            return open_tag + escaped_map[normalized] + close_tag
+        return m.group(0)
+    return _W_T_PATTERN.sub(repl, xml_text)
+
+
 def excel_cell_replace(translate_path: str, path: str):
     """
     Replace the text in an xlsx at the zip/XML level, preserving images
@@ -222,6 +260,37 @@ def excel_cell_replace(translate_path: str, path: str):
                 text = data.decode("utf-8")
                 text = replace_sheet_names(text, escaped_map)
                 data = text.encode("utf-8")
+            zout.writestr(item, data)
+    return file_name
+
+def word_text_replace(translate_path: str, path: str):
+    """
+    Replace the text in a .docx at the zip/XML level, preserving images,
+    styles, fields, headers/footers and rich-text run formatting.
+    与 excel_cell_replace 同构：只改 <w:t> 文本，其余部件原样写回。
+    """
+    with open(translate_path, "r", encoding="utf-8") as f:
+        translate_map = json.load(f)
+
+    escaped_map = {html.escape(k, quote=False): html.escape(v, quote=False)
+                   for k, v in translate_map.items()}
+
+    file_name = os.path.join(os.path.dirname(path),
+                            os.path.splitext(os.path.basename(path))[0] + "-translated.docx")
+    print(f"Saving translated file to {file_name}")
+
+    with zipfile.ZipFile(path, "r") as zin, \
+         zipfile.ZipFile(file_name, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            name = item.filename
+            if name.startswith("word/") and name.endswith(".xml"):
+                base = name[len("word/"):]
+                if (base == "document.xml"
+                        or base.startswith(("header", "footer", "footnotes", "endnotes"))):
+                    text = data.decode("utf-8")
+                    text = replace_w_t_text(text, escaped_map)
+                    data = text.encode("utf-8")
             zout.writestr(item, data)
     return file_name
 
@@ -275,9 +344,19 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
             on_event(ev)
 
     try:
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".xlsx":
+            extract_fn = lambda: translate_excel(path)
+            replace_fn = excel_cell_replace
+        elif ext == ".docx":
+            extract_fn = lambda: translate_word(path)
+            replace_fn = word_text_replace
+        else:
+            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx）")
+
         emit({"type": "status", "stage": "extract"})
-        # 1. 获取翻译的 excel 文本到 json_path 中
-        print_translate(json_path, path)
+        # 1. 提取文本到 json_path 中
+        write_translate_json(json_path, extract_fn())
 
         # 2. 大模型翻译
         with open(json_path, "r", encoding="utf-8") as f:
@@ -314,9 +393,9 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
                 # 二次翻译失败不中断主流程，保留首遍结果（已落盘）
                 emit({"type": "status", "stage": "retranslate-skipped", "message": str(e)[:120]})
 
-        # 3. 替换 Excel 中的文本（所有翻译都已完成才生成）
+        # 3. 替换文件中的文本（所有翻译都已完成才生成）
         emit({"type": "status", "stage": "replace"})
-        out_file = excel_cell_replace(json_path, path)
+        out_file = replace_fn(json_path, path)
         emit({"type": "done", "file": os.path.basename(out_file)})
         print("Completed")
     except Exception as e:

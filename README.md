@@ -70,8 +70,9 @@ MODEL=deepseek-v3.2
 ```bash
 sudo apt install python3-venv nginx
 python3 -m venv ~/venv && source ~/venv/bin/activate
-pip install fastapi uvicorn openai openpyxl python-dotenv
-pip freeze > requirements.txt
+pip install -r requirements.txt
+# pip install fastapi uvicorn openai openpyxl python-dotenv
+# pip freeze > requirements.txt
 ```
 
 **2. 同步代码 + `.env` 到服务器**（`.env` 不要进 git）。

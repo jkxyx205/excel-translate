@@ -22,7 +22,7 @@ run_pipeline = _mod.run_pipeline
 
 app = FastAPI()
 
-EXCEL_DIR = "excel"
+EXCEL_DIR = os.path.join(os.path.dirname(__file__), "excel")
 os.makedirs(EXCEL_DIR, exist_ok=True)
 
 # 单任务守护：同一时刻只跑一个翻译
@@ -146,7 +146,9 @@ async def upload(request: Request):
     def worker():
         running.set()
         try:
-            run_pipeline(path, translate, on_event=lambda ev: q.put(ev))
+            run_pipeline(path, translate,
+                         json_path=os.path.join(EXCEL_DIR, "translate.json"),
+                         on_event=lambda ev: q.put(ev))
         except Exception:
             # run_pipeline 已 emit error；兜底再放一条，防 SSE 卡住
             q.put({"type": "error", "message": "pipeline 异常退出"})
@@ -178,9 +180,10 @@ def stream(job_id: str):
 @app.get("/download/{filename}")
 def download(filename: str):
     safe = os.path.basename(filename)
-    if not os.path.exists(safe):
+    path = os.path.join(EXCEL_DIR, safe)
+    if not os.path.exists(path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
-    return FileResponse(safe, filename=safe)
+    return FileResponse(path, filename=safe)
 
 
 if __name__ == "__main__":

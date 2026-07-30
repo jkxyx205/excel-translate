@@ -6,7 +6,6 @@ import os
 import re
 import zipfile
 import time
-from googletrans import Translator
 import dotenv
 from openai import OpenAI
 from openpyxl import load_workbook
@@ -55,6 +54,7 @@ def translator(json_file: str, src: str, dest: str):
         str: zh-cn
         dist: en
     """
+    from googletrans import Translator  # 惰性导入：避免与 openai 的 httpx 版本冲突
     translator = Translator()
 
     with open(json_file, 'r', encoding='utf-8') as f:
@@ -201,8 +201,9 @@ def excel_cell_replace(translate_path: str, path: str):
     escaped_map = {html.escape(k, quote=False): html.escape(v, quote=False)
                    for k, v in translate_map.items()}
 
-    # 获取 path 中原文件名后再添加"-translated"作为新的文件名
-    file_name = os.path.splitext(os.path.basename(path))[0] + "-translated.xlsx"
+    # 输出文件放在与输入同目录，避免依赖启动时的 CWD
+    file_name = os.path.join(os.path.dirname(path),
+                            os.path.splitext(os.path.basename(path))[0] + "-translated.xlsx")
     print(f"Saving translated file to {file_name}")
 
     with zipfile.ZipFile(path, "r") as zin, \
@@ -316,7 +317,7 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
         # 3. 替换 Excel 中的文本（所有翻译都已完成才生成）
         emit({"type": "status", "stage": "replace"})
         out_file = excel_cell_replace(json_path, path)
-        emit({"type": "done", "file": out_file})
+        emit({"type": "done", "file": os.path.basename(out_file)})
         print("Completed")
     except Exception as e:
         emit({"type": "error", "message": str(e)})

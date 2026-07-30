@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+excel/
+*.txt
+*.json
+*-translated.xlsx
+.DS_Store
+.git/
+.claude/
+skills/

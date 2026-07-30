@@ -1,0 +1,9 @@
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"     # 只对本地暴露，外网走 nginx 反代
+    env_file: .env
+    volumes:
+      - ./excel:/app/excel        # 上传/产物持久化
+    restart: unless-stopped

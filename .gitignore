@@ -4,3 +4,4 @@ excel
 __pycache__
 *.json
 .env
+config.sh

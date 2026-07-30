@@ -69,8 +69,10 @@ MODEL=deepseek-v3.2
 **1. 装依赖**
 ```bash
 sudo apt install python3-venv nginx
-python3 -m venv ~/venv && source ~/venv/bin/activate
+python3.14 -m venv ~/venv && source ~/venv/bin/activate
 pip install -r requirements.txt
+python3.14 app.py
+
 # pip install fastapi uvicorn openai openpyxl python-dotenv
 # pip freeze > requirements.txt
 ```

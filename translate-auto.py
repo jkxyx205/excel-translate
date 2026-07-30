@@ -146,6 +146,22 @@ def _normalize(content: str) -> str:
     return content.replace('\r\n', '\n').replace('\r', '\n').strip()
 
 
+# Excel 工作表名禁止字符：: \ / ? * [ ]  及首尾空格、超过 31 字符
+_SHEET_NAME_FORBIDDEN = re.compile(r'[:\\/?*\[\]]')
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    """让译文符合 Excel 工作表名规则，避免打开时被判定为损坏。"""
+    name = _SHEET_NAME_FORBIDDEN.sub('', name).strip()
+    if len(name) > 31:
+        # 截到 31 字以内，并尽量落在最后一个空格处，避免切断单词
+        cut = name[:31]
+        if ' ' in cut:
+            cut = cut[:cut.rfind(' ')].rstrip()
+        name = cut
+    return name
+
+
 def _parse_json(raw: str):
     """从大模型原始输出解析 JSON，容错 markdown 围栏与「key 缺值」残缺条目。"""
     s = raw.strip()
@@ -246,7 +262,9 @@ def replace_sheet_names(xml_text: str, escaped_map: dict) -> str:
         prefix, content, suffix = m.group(1), m.group(2), m.group(3)
         normalized = _normalize(content)
         if normalized in escaped_map:
-            return prefix + escaped_map[normalized] + suffix
+            # 译文要符合 Excel 工作表名规则再写回：禁止字符/首尾空格/31 字上限
+            name = _sanitize_sheet_name(html.unescape(escaped_map[normalized]))
+            return prefix + html.escape(name, quote=False) + suffix
         return m.group(0)
     return _SHEET_NAME_PATTERN.sub(repl, xml_text)
 

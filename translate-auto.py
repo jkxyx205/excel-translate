@@ -86,10 +86,87 @@ def translator(json_file: str, src: str, dest: str):
 
 _T_PATTERN = re.compile(r'(<t(?:\s[^>]*)?>)([^<>]*)(</t>)')
 _SHEET_NAME_PATTERN = re.compile(r'(<sheet\b[^>]*?\sname=")([^"]*)(")')
+# 匹配 JSON 对象里「key 缺少 : value」的残缺条目：键后直接是 , 或 }
+#   ..."key",  → ..."key": "key",
+# 只匹配键位置（前驱是 { 或 ,），不会误伤值（值前驱是 :）。
+_KEY_MISSING_VALUE = re.compile(r'([{,]\s*)("(?:[^"\\]|\\.)*")(\s*)([,}])')
 
 
 def _normalize(content: str) -> str:
     return content.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def _parse_json(raw: str):
+    """从大模型原始输出解析 JSON，容错 markdown 围栏与「key 缺值」残缺条目。"""
+    s = raw.strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].lstrip().startswith("```"):
+            lines = lines[:-1]
+        s = "\n".join(lines).strip()
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end > start:
+        s = s[start:end + 1]
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return json.loads(_KEY_MISSING_VALUE.sub(r'\1\2: \2\4', s))
+
+
+def _load_translated_map(raw: str, original_keys) -> dict:
+    """解析 LLM 输出并与原始 key 对齐：缺失或空值用 key 自身兜底。"""
+    data = _parse_json(raw)
+    result = {}
+    for k in original_keys:
+        v = data.get(k) if isinstance(data, dict) else None
+        result[k] = v if v else k
+    return result
+
+
+# 匹配 CJK 汉字（说明该 value 仍含源语言文字，即没翻出来）
+_CJK = re.compile(r'[一-鿿㐀-䶿]')
+
+
+def _needs_translation(value: str) -> bool:
+    return bool(_CJK.search(value))
+
+
+def _build_translate_prompt(translate: str, data: dict) -> str:
+    return f"""
+                待翻译的 JSON 数据如下：
+                ```json
+                {json.dumps(data)}
+                ```
+                将上面 json 中的每个 key 由{translate}，翻译结果写入该 key 对应的 value 中。
+                翻译规则：
+                - 凡是含有源语言文字的 key，都必须翻译，不得保留原文。即便是短句、含错别字、含标点、含型号夹杂的文字，也要翻译其中的人类语言部分。
+                - 只有纯数字、纯型号编号、纯单位符号（如 16.2V、3680mAh、>85%、/）才允许 value 等于 key 原样保留。
+                - value 不得为空字符串。
+                - key 必须原样保留，不得改写、不得纠正错别字、不得增删任何字符（否则会无法对回原文）。
+                严格要求：
+                1. 只返回 JSON。
+                2. 不允许 Markdown 代码块。
+                3. 不允许任何解释文字。
+                4. 保持 JSON 结构不变，key 集合与输入完全一致。
+                5. 输出必须可以被 Python json.loads() 直接解析。
+                """
+
+
+def _build_retry_prompt(translate: str, keys: list) -> str:
+    """二次翻译用位置对齐的数组，避开 LLM 改写 key 导致对不上的问题。"""
+    return f"""
+                下面是一个 JSON 数组，数组中每个元素都是需要翻译的文本（按此顺序）：
+                ```json
+                {json.dumps(keys, ensure_ascii=False)}
+                ```
+                请将数组中的每个元素{translate}，并按【完全相同的顺序】返回一个 JSON 对象，格式为 {{"items": ["译文1", "译文2", ...]}}。
+                要求：
+                - 每条都必须翻译，绝对不允许让译文等于原文（不得保留源语言文字）。
+                - 只返回 JSON，不允许 Markdown 代码块和解释文字。
+                - 输出必须可被 Python json.loads() 直接解析。
+                """
 
 
 def replace_t_text(xml_text: str, escaped_map: dict) -> str:
@@ -145,17 +222,22 @@ def excel_cell_replace(translate_path: str, path: str):
                 text = replace_sheet_names(text, escaped_map)
                 data = text.encode("utf-8")
             zout.writestr(item, data)
+    return file_name
 
-def chat(content: str):
+def chat(content: str, on_chunk=None):
     client = OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url="https://llm-4m24ghuzgkr9cr4e.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+            base_url=os.getenv("BASE_URL"),
         )
 
-    messages = [{"role": "user", "content": content}]
+    messages = [{"role": "system","content": "你是一个JSON生成助手，只输出合法JSON"},
+                {"role": "user", "content": content}]
     completion = client.chat.completions.create(
-        model="deepseek-v3.2",  # 您可以按需更换为其它深度思考模型
+        model=os.getenv("MODEL"),  # 您可以按需更换为其它深度思考模型
         messages=messages,
+        response_format={
+         "type": "json_object"
+        },
         extra_body={"enable_thinking": True},
         stream=True
     )
@@ -170,43 +252,72 @@ def chat(content: str):
         if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:
             if not is_answering:
                 print(delta.reasoning_content, end="", flush=True)
+                if on_chunk:
+                    on_chunk({"type": "reasoning", "text": delta.reasoning_content})
         if hasattr(delta, "content") and delta.content:
             if not is_answering:
                 print("\n" + "=" * 20 + "完整回复" + "=" * 20)
                 is_answering = True
             print(delta.content, end="", flush=True)
-            # 累积完整的回复内容，流式结束后再写入文件
+            # 累积完整的回复内容，流式结束后返回给调用方
             full_content.append(delta.content)
+            if on_chunk:
+                on_chunk({"type": "content", "text": delta.content})
 
-    # 将完整的回复写入 translate-chat.json
-    with open("translate.json", "w", encoding="utf-8") as f:
-        f.write("".join(full_content))
+    return "".join(full_content)
 
-if __name__ == "__main__":
-    path = "./excel/T310产品规格书.xlsx"
-    translate = "中文翻译成英文"
 
-    json_path = "translate.json"
-    # 1. 获取翻译的 excel 文本到 translate.json 中
-    print_translate(json_path, path)
+def run_pipeline(path: str, translate: str, json_path: str = "translate.json", on_event=None):
+    """端到端翻译流程：提取 → 大模型翻译 → 替换。on_event 回调用于推送进度。"""
+    def emit(ev):
+        if on_event:
+            on_event(ev)
 
-    # 2. 大模型翻译，claude --dangerously-skip-permissions 提示词：将 @translate.json 中的 key 由中文翻译成英文，翻译结果写入 key 对应的 value 中;
-    # 2. 直接调用谷歌翻译，不稳定，经常翻译不出来
-    # translator(json_path, 'en', 'zh-cn')
+    try:
+        emit({"type": "status", "stage": "extract"})
+        # 1. 获取翻译的 excel 文本到 json_path 中
+        print_translate(json_path, path)
 
-    # 获取 translate.json 内容
-    with open(json_path, "r", encoding="utf-8") as f:
-        translate_data = json.load(f)
+        # 2. 大模型翻译
+        with open(json_path, "r", encoding="utf-8") as f:
+            translate_data = json.load(f)
+        emit({"type": "status", "stage": "translate", "total": len(translate_data)})
+        raw = chat(_build_translate_prompt(translate, translate_data),
+                   on_chunk=lambda c: emit({"type": "chunk", **c}))
+        merged = _load_translated_map(raw, translate_data)
+        # 首遍翻译结果先落盘（二次翻译崩了也有首遍结果可用，且便于中途查看）
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(merged, f, ensure_ascii=False, indent=2)
 
-        chat(f"""
-        ```json
-        {json.dumps(translate_data)}
-        ```
-        将上面 json 中的 key 由{translate}，翻译结果写入 key 对应的 value 中（如果不需要翻译的，那么 value 直接用 key 填充），返回最终的 json，不要 markdown 格式。
-        """)
+        # 2.7 兜底二次翻译：value 仍含中文的条目单独再翻一次
+        retry_keys = [k for k, v in merged.items() if _needs_translation(v)]
+        if retry_keys:
+            emit({"type": "status", "stage": "retranslate", "total": len(retry_keys)})
+            try:
+                # 用位置对齐的数组，避免 LLM 改写 key 导致对不回原文
+                raw2 = chat(_build_retry_prompt(translate, retry_keys),
+                            on_chunk=lambda c: emit({"type": "chunk", **c}))
+                items = _parse_json(raw2)
+                if isinstance(items, dict):
+                    items = items.get("items")
+                if isinstance(items, list):
+                    for i, k in enumerate(retry_keys):
+                        if i < len(items):
+                            nv = items[i]
+                            if nv and not _needs_translation(nv):
+                                merged[k] = nv
+                # 二次翻译回填后重新写入 translate.json
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                # 二次翻译失败不中断主流程，保留首遍结果（已落盘）
+                emit({"type": "status", "stage": "retranslate-skipped", "message": str(e)[:120]})
 
-    # 3. 替换 Excel 中的文本
-    excel_cell_replace(json_path, path)
-
-    print('Completed')
-    # 注意：图片中的文字无法翻译
+        # 3. 替换 Excel 中的文本（所有翻译都已完成才生成）
+        emit({"type": "status", "stage": "replace"})
+        out_file = excel_cell_replace(json_path, path)
+        emit({"type": "done", "file": out_file})
+        print("Completed")
+    except Exception as e:
+        emit({"type": "error", "message": str(e)})
+        raise

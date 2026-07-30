@@ -58,6 +58,27 @@ def translate_word(path: str):
                   texts.add(norm)
   return texts
 
+def translate_ppt(path: str):
+  """
+    Extract all unique text values from a .pptx at the zip/XML level.
+    按 <a:t> run 边界提取（DrawingML 文本运行），替换时同样以 <a:t> 为单位，
+    完整保留版式、母版、动画、图表等结构（不做 run 合并）。
+    只处理正文幻灯片与备注页，不改动母版/版式（其文字多为占位提示，且被多页共用）。
+  """
+  texts = set()
+  with zipfile.ZipFile(path, "r") as z:
+      for info in z.infolist():
+          name = info.filename
+          if not (name.startswith("ppt/slides/") or name.startswith("ppt/notesSlides/")) \
+                  or not name.endswith(".xml"):
+              continue
+          xml_text = z.read(name).decode("utf-8", errors="ignore")
+          for m in _A_T_PATTERN.finditer(xml_text):
+              norm = _normalize(html.unescape(m.group(2)))
+              if norm:
+                  texts.add(norm)
+  return texts
+
 # separator = '======'
 
 def write_translate_json(json_path: str, texts: set):
@@ -113,6 +134,8 @@ _T_PATTERN = re.compile(r'(<t(?:\s[^>]*)?>)([^<>]*)(</t>)')
 _SHEET_NAME_PATTERN = re.compile(r'(<sheet\b[^>]*?\sname=")([^"]*)(")')
 # Word 正文文本运行：<w:t>...</w:t>（含 <w:t xml:space="preserve">...</w:t>）
 _W_T_PATTERN = re.compile(r'(<w:t(?:\s[^>]*)?>)([^<>]*)(</w:t>)')
+# PPT 正文文本运行：<a:t>...</a:t>（DrawingML，含 <a:t xml:space="preserve">...</a:t>）
+_A_T_PATTERN = re.compile(r'(<a:t(?:\s[^>]*)?>)([^<>]*)(</a:t>)')
 # 匹配 JSON 对象里「key 缺少 : value」的残缺条目：键后直接是 , 或 }
 #   ..."key",  → ..."key": "key",
 # 只匹配键位置（前驱是 { 或 ,），不会误伤值（值前驱是 :）。
@@ -227,6 +250,17 @@ def replace_w_t_text(xml_text: str, escaped_map: dict) -> str:
     return _W_T_PATTERN.sub(repl, xml_text)
 
 
+def replace_a_t_text(xml_text: str, escaped_map: dict) -> str:
+    """替换 PPT 的 <a:t> 文本，保留外层 run 的所有格式属性。"""
+    def repl(m):
+        open_tag, content, close_tag = m.group(1), m.group(2), m.group(3)
+        normalized = _normalize(content)
+        if normalized in escaped_map:
+            return open_tag + escaped_map[normalized] + close_tag
+        return m.group(0)
+    return _A_T_PATTERN.sub(repl, xml_text)
+
+
 def excel_cell_replace(translate_path: str, path: str):
     """
     Replace the text in an xlsx at the zip/XML level, preserving images
@@ -294,6 +328,35 @@ def word_text_replace(translate_path: str, path: str):
             zout.writestr(item, data)
     return file_name
 
+def ppt_text_replace(translate_path: str, path: str):
+    """
+    Replace the text in a .pptx at the zip/XML level, preserving images,
+    charts, animations, layouts and rich-text run formatting.
+    与 word/excel 同构：只改 <a:t> 文本，其余部件原样写回。
+    """
+    with open(translate_path, "r", encoding="utf-8") as f:
+        translate_map = json.load(f)
+
+    escaped_map = {html.escape(k, quote=False): html.escape(v, quote=False)
+                   for k, v in translate_map.items()}
+
+    file_name = os.path.join(os.path.dirname(path),
+                            os.path.splitext(os.path.basename(path))[0] + "-translated.pptx")
+    print(f"Saving translated file to {file_name}")
+
+    with zipfile.ZipFile(path, "r") as zin, \
+         zipfile.ZipFile(file_name, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            name = item.filename
+            if (name.startswith("ppt/slides/") or name.startswith("ppt/notesSlides/")) \
+                    and name.endswith(".xml"):
+                text = data.decode("utf-8")
+                text = replace_a_t_text(text, escaped_map)
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    return file_name
+
 def chat(content: str, on_chunk=None):
     client = OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
@@ -351,8 +414,11 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
         elif ext == ".docx":
             extract_fn = lambda: translate_word(path)
             replace_fn = word_text_replace
+        elif ext == ".pptx":
+            extract_fn = lambda: translate_ppt(path)
+            replace_fn = ppt_text_replace
         else:
-            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx）")
+            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx / .pptx）")
 
         emit({"type": "status", "stage": "extract"})
         # 1. 提取文本到 json_path 中

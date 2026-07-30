@@ -48,9 +48,9 @@ HTML = """<!doctype html>
 </style>
 </head>
 <body>
-  <h2>Excel / Word 翻译</h2>
+  <h2>Excel / Word / PPT 翻译</h2>
   <div class="row">
-    <input type="file" id="file" accept=".xlsx,.docx">
+    <input type="file" id="file" accept=".xlsx,.docx,.pptx">
   </div>
   <div class="row">
     翻译方向：
@@ -78,7 +78,7 @@ let es = null;
 
 $("start").onclick = async () => {
   const file = $("file").files[0];
-  if (!file) { alert("请先选择 xlsx / docx 文件"); return; }
+  if (!file) { alert("请先选择 xlsx / docx / pptx 文件"); return; }
   const translate = $("translate").value;
   $("reasoning").textContent = "";
   $("content").textContent = "";

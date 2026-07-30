@@ -34,7 +34,7 @@ HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Excel 翻译</title>
+<title>Excel / Word / PPT 翻译</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
   .row { margin: 12px 0; }

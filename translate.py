@@ -180,7 +180,7 @@ def excel_cell_replace(translate_path: str, path: str):
             zout.writestr(item, data)
 
 if __name__ == "__main__":
-    path = "./excel/Dongtai- Rechargeable air blow.xlsx"
+    path = "./excel/TV83有刷TV83S无刷SOP.xlsx"
     json_path = "translate.json"
 
     # 1. 获取翻译的 excel 文本到 translate.json 中

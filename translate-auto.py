@@ -175,12 +175,24 @@ def _load_translated_map(raw: str, original_keys) -> dict:
     return result
 
 
-# 匹配 CJK 汉字（说明该 value 仍含源语言文字，即没翻出来）
+# 匹配 CJK 汉字（中文源方向：value 仍含汉字 = 没翻出来）
 _CJK = re.compile(r'[一-鿿㐀-䶿]')
+# 匹配拉丁字母（英文源方向：原文与译文一致且含字母 = LLM 原样回吐，没翻）
+_LATIN = re.compile(r'[A-Za-z]')
 
 
-def _needs_translation(value: str) -> bool:
-    return bool(_CJK.search(value))
+def _needs_translation(key: str, value: str) -> bool:
+    """value 是否仍需翻译。
+
+    中文源方向：value 仍含汉字 → 没翻。
+    英文源方向：value 与 key 完全一致且含拉丁字母 → LLM 原样回吐，没翻。
+    纯数字/型号编号/单位符号（无汉字、无字母，或与 key 一致但本就允许保留）不会被命中。
+    """
+    if _CJK.search(value):
+        return True
+    if value == key and _LATIN.search(value):
+        return True
+    return False
 
 
 def _build_translate_prompt(translate: str, data: dict) -> str:
@@ -435,10 +447,14 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(merged, f, ensure_ascii=False, indent=2)
 
-        # 2.7 兜底二次翻译：value 仍含中文的条目单独再翻一次
-        retry_keys = [k for k, v in merged.items() if _needs_translation(v)]
-        if retry_keys:
-            emit({"type": "status", "stage": "retranslate", "total": len(retry_keys)})
+        # 2.7 兜底重译：value 仍含源语言文字的条目反复重译，直至全部翻完或无进展。
+        max_passes = 50  # 防止异常情况下死循环的后备上限
+        for pass_no in range(1, max_passes + 1):
+            retry_keys = [k for k, v in merged.items() if _needs_translation(k, v)]
+            if not retry_keys:
+                break
+            emit({"type": "status", "stage": "retranslate",
+                  "pass": pass_no, "total": len(retry_keys)})
             try:
                 # 用位置对齐的数组，避免 LLM 改写 key 导致对不回原文
                 raw2 = chat(_build_retry_prompt(translate, retry_keys),
@@ -447,17 +463,26 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
                 if isinstance(items, dict):
                     items = items.get("items")
                 if isinstance(items, list):
+                    improved = 0
                     for i, k in enumerate(retry_keys):
                         if i < len(items):
                             nv = items[i]
-                            if nv and not _needs_translation(nv):
+                            if nv and not _needs_translation(k, nv):
                                 merged[k] = nv
-                # 二次翻译回填后重新写入 translate.json
+                                improved += 1
+                # 重译回填后重新写入 translate.json
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(merged, f, ensure_ascii=False, indent=2)
+                # 本轮无任何改善则提前退出，避免对无法翻译的条目无限重试
+                if improved == 0:
+                    emit({"type": "status", "stage": "retranslate-stuck",
+                          "message": f"pass {pass_no} 无改善，停止重译"})
+                    break
             except Exception as e:
-                # 二次翻译失败不中断主流程，保留首遍结果（已落盘）
-                emit({"type": "status", "stage": "retranslate-skipped", "message": str(e)[:120]})
+                # 重译失败不中断主流程，保留已有结果（已落盘）
+                emit({"type": "status", "stage": "retranslate-skipped",
+                      "message": str(e)[:120]})
+                break
 
         # 3. 替换文件中的文本（所有翻译都已完成才生成）
         emit({"type": "status", "stage": "replace"})

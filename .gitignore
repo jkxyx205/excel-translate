@@ -4,3 +4,4 @@ excel
 *.xlsx
 __pycache__
 *.json
+.env

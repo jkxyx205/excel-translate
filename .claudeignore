@@ -1,0 +1,18 @@
+# secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Java
+target/
+
+# Node
+node_modules/
+
+# Python
+.venv/
+
+# IDE
+.idea/
+.vscode/

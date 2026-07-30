@@ -1,0 +1,7 @@
+# Web 应用依赖（app.py / translate-auto.py）
+fastapi==0.128.0
+uvicorn==0.40.0
+openai==2.15.0
+openpyxl==3.1.5
+python-dotenv==1.2.1
+# googletrans 已改为惰性导入（仅 translator() 遗留路径用到，与 openai 的 httpx 版本冲突，默认不装）

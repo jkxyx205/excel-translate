@@ -1,0 +1,5 @@
+server_ip="106.125.122.117"
+dir="/usr/local/projects"
+project_name="translate"
+port="8000"
+project_path="$dir/$project_name"

@@ -6,6 +6,8 @@ import os
 import re
 import zipfile
 import time
+from html.parser import HTMLParser
+
 import dotenv
 from openai import OpenAI
 from openpyxl import load_workbook
@@ -79,6 +81,26 @@ def translate_ppt(path: str):
                   texts.add(norm)
   return texts
 
+
+def translate_text_file(path: str):
+  """Extract text from plain text / markdown / html files while preserving structure."""
+  ext = os.path.splitext(path)[1].lower()
+  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+      raw = f.read()
+
+  if ext in {".html", ".htm"}:
+      parser = _HTMLTextCollector()
+      parser.feed(raw)
+      parser.close()
+      return {text for text in parser.texts if text}
+
+  texts = set()
+  for line in raw.splitlines():
+      norm = _normalize(line)
+      if norm:
+          texts.add(norm)
+  return texts
+
 # separator = '======'
 
 def write_translate_json(json_path: str, texts: set):
@@ -145,6 +167,27 @@ _KEY_MISSING_VALUE = re.compile(r'([{,]\s*)("(?:[^"\\]|\\.)*")(\s*)([,}])')
 def _normalize(content: str) -> str:
     return content.replace('\r\n', '\n').replace('\r', '\n').strip()
 
+class _HTMLTextCollector(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.texts = set()
+
+    def handle_data(self, data):
+        norm = _normalize(data)
+        if norm:
+            self.texts.add(norm)
+
+
+def _replace_text_preserve_ws(content: str, escaped_map: dict) -> str:
+    if not content:
+        return content
+    leading = re.match(r'^\s*', content).group(0)
+    trailing = re.search(r'\s*$', content).group(0)
+    inner = content[len(leading):len(content) - len(trailing)] if trailing else content[len(leading):]
+    normalized = _normalize(inner)
+    if normalized in escaped_map:
+        return leading + escaped_map[normalized] + trailing
+    return content
 
 # Excel 工作表名禁止字符：: \ / ? * [ ]  及首尾空格、超过 31 字符
 _SHEET_NAME_FORBIDDEN = re.compile(r'[:\\/?*\[\]]')
@@ -306,6 +349,84 @@ def replace_a_t_text(xml_text: str, escaped_map: dict) -> str:
     return _A_T_PATTERN.sub(repl, xml_text)
 
 
+def text_file_replace(translate_path: str, path: str):
+    """Replace text in plain text / markdown / html files while preserving structure."""
+    with open(translate_path, "r", encoding="utf-8") as f:
+        translate_map = json.load(f)
+
+    escaped_map = {html.escape(k, quote=False): html.escape(v, quote=False)
+                   for k, v in translate_map.items()}
+
+    ext = os.path.splitext(path)[1].lower()
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+
+    if ext in {".html", ".htm"}:
+        parser = _HTMLTextReplacer(escaped_map)
+        parser.feed(text)
+        parser.close()
+        out_text = parser.get_output()
+        suffix = ext
+    else:
+        out_lines = []
+        for line in text.splitlines(keepends=True):
+            out_lines.append(_replace_text_preserve_ws(line, escaped_map))
+        out_text = "".join(out_lines)
+        suffix = ext if ext else ".txt"
+
+    base_name = os.path.splitext(os.path.basename(path))[0]
+    file_name = os.path.join(
+        os.path.dirname(path),
+        f"{base_name}-translated{suffix}"
+    )
+    with open(file_name, "w", encoding="utf-8") as f:
+        f.write(out_text)
+    return file_name
+
+
+class _HTMLTextReplacer(HTMLParser):
+    def __init__(self, escaped_map: dict):
+        super().__init__(convert_charrefs=False)
+        self.escaped_map = escaped_map
+        self.parts = []
+
+    def handle_data(self, data):
+        if data.isspace() or not data:
+            self.parts.append(data)
+            return
+        self.parts.append(_replace_text_preserve_ws(data, self.escaped_map))
+
+    def handle_starttag(self, tag, attrs):
+        self.parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag):
+        self.parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag, attrs):
+        self.parts.append(self.get_starttag_text())
+
+    def handle_comment(self, data):
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl):
+        self.parts.append(f"<!{decl}>")
+
+    def unknown_decl(self, data):
+        self.parts.append(f"<!{data}>")
+
+    def handle_pi(self, data):
+        self.parts.append(f"<?{data}>")
+
+    def handle_entityref(self, name):
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.parts.append(f"&#{name};")
+
+    def get_output(self):
+        return "".join(self.parts)
+
+
 def excel_cell_replace(translate_path: str, path: str):
     """
     Replace the text in an xlsx at the zip/XML level, preserving images
@@ -462,8 +583,11 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
         elif ext == ".pptx":
             extract_fn = lambda: translate_ppt(path)
             replace_fn = ppt_text_replace
+        elif ext in {".txt", ".md", ".markdown", ".html", ".htm"}:
+            extract_fn = lambda: translate_text_file(path)
+            replace_fn = text_file_replace
         else:
-            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx / .pptx）")
+            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx / .pptx / .txt / .md / .html）")
 
         emit({"type": "status", "stage": "extract"})
         # 1. 提取文本到 json_path 中

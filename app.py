@@ -50,7 +50,7 @@ HTML = """<!doctype html>
 <body>
   <h2>Excel / Word / PPT 翻译</h2>
   <div class="row">
-    <input type="file" id="file" accept=".xlsx,.docx,.pptx">
+    <input type="file" id="file" accept=".xlsx,.docx,.pptx,.txt,.md,.markdown,.html,.htm">
   </div>
   <div class="row">
     翻译方向：

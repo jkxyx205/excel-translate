@@ -82,6 +82,30 @@ def translate_ppt(path: str):
   return texts
 
 
+def translate_pdf(path: str):
+  """
+    Extract all unique text values from a PDF at the span 粒度
+    （PyMuPDF 的 text span，对应 Office 的 run 粒度）。只取文本块，跳过
+    图像块；替换时同样以 span 为单位原地改写，保留图像与矢量图。
+  """
+  import fitz  # 惰性导入：PyMuPDF 仅 PDF 路径需要
+  texts = set()
+  doc = fitz.open(path)
+  try:
+      for page in doc:
+          for block in page.get_text("dict")["blocks"]:
+              if block.get("type") != 0:  # 0 = 文本块，1 = 图像块
+                  continue
+              for line in block["lines"]:
+                  for span in line["spans"]:
+                      norm = _normalize(span["text"])
+                      if norm:
+                          texts.add(norm)
+  finally:
+      doc.close()
+  return texts
+
+
 def translate_text_file(path: str):
   """Extract text from plain text / markdown / html files while preserving structure."""
   ext = os.path.splitext(path)[1].lower()
@@ -349,6 +373,49 @@ def replace_a_t_text(xml_text: str, escaped_map: dict) -> str:
     return _A_T_PATTERN.sub(repl, xml_text)
 
 
+def pdf_text_replace(translate_path: str, path: str):
+    """
+    Replace text in a PDF at the span level via redaction annotations,
+    preserving images and vector graphics. 与 excel/word/ppt 同构：只改
+    span 文本，其余内容原样保留。
+    限制：PDF 文本无自动回流，译文长于原文时可能越界相邻文本（已知取舍）。
+    """
+    import fitz
+    with open(translate_path, "r", encoding="utf-8") as f:
+        translate_map = json.load(f)
+
+    norm_map = {_normalize(k): v for k, v in translate_map.items()}
+
+    file_name = os.path.join(os.path.dirname(path),
+                            os.path.splitext(os.path.basename(path))[0] + "-translated.pdf")
+    print(f"Saving translated file to {file_name}")
+
+    doc = fitz.open(path)
+    try:
+        for page in doc:
+            # 先收集所有要改的 span，再统一加 redaction 并 apply
+            # （apply 会改变页面，必须在收集完成后执行）
+            targets = []
+            for block in page.get_text("dict")["blocks"]:
+                if block.get("type") != 0:
+                    continue
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        norm = _normalize(span["text"])
+                        if norm in norm_map:
+                            targets.append((span["bbox"], norm_map[norm], span["size"]))
+            for bbox, repl, size in targets:
+                # 译文含 CJK 用内置 CJK 字体，否则拉丁字体
+                font = "china-s" if _CJK.search(repl) else "helv"
+                page.add_redact_annot(bbox, text=repl, fontsize=size, fontname=font)
+            # 保留图像：只清除/改写文本，不挖空图片
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+        doc.save(file_name)
+    finally:
+        doc.close()
+    return file_name
+
+
 def text_file_replace(translate_path: str, path: str):
     """Replace text in plain text / markdown / html files while preserving structure."""
     with open(translate_path, "r", encoding="utf-8") as f:
@@ -583,11 +650,14 @@ def run_pipeline(path: str, translate: str, json_path: str = "translate.json", o
         elif ext == ".pptx":
             extract_fn = lambda: translate_ppt(path)
             replace_fn = ppt_text_replace
+        elif ext == ".pdf":
+            extract_fn = lambda: translate_pdf(path)
+            replace_fn = pdf_text_replace
         elif ext in {".txt", ".md", ".markdown", ".html", ".htm"}:
             extract_fn = lambda: translate_text_file(path)
             replace_fn = text_file_replace
         else:
-            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx / .pptx / .txt / .md / .html）")
+            raise ValueError(f"不支持的文件类型: {ext}（仅支持 .xlsx / .docx / .pptx / .pdf / .txt / .md / .html）")
 
         emit({"type": "status", "stage": "extract"})
         # 1. 提取文本到 json_path 中

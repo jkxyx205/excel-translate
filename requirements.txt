@@ -4,4 +4,5 @@ uvicorn==0.40.0
 openai==2.15.0
 openpyxl==3.1.5
 python-dotenv==1.2.1
+PyMuPDF==1.27.2.3  # PDF 翻译路径惰性导入（fitz）
 # googletrans 已改为惰性导入（仅 translator() 遗留路径用到，与 openai 的 httpx 版本冲突，默认不装）

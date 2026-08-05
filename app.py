@@ -34,7 +34,7 @@ HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Excel / Word / PPT 翻译</title>
+<title>Excel / Word / PPT / PDF 翻译</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
   .row { margin: 12px 0; }
@@ -48,9 +48,9 @@ HTML = """<!doctype html>
 </style>
 </head>
 <body>
-  <h2>Excel / Word / PPT 翻译</h2>
+  <h2>Excel / Word / PPT / PDF 翻译</h2>
   <div class="row">
-    <input type="file" id="file" accept=".xlsx,.docx,.pptx,.txt,.md,.markdown,.html,.htm">
+    <input type="file" id="file" accept=".xlsx,.docx,.pptx,.pdf,.txt,.md,.markdown,.html,.htm">
   </div>
   <div class="row">
     翻译方向：
@@ -78,7 +78,7 @@ let es = null;
 
 $("start").onclick = async () => {
   const file = $("file").files[0];
-  if (!file) { alert("请先选择 xlsx / docx / pptx 文件"); return; }
+  if (!file) { alert("请先选择 xlsx / docx / pptx / pdf 文件"); return; }
   const translate = $("translate").value;
   $("reasoning").textContent = "";
   $("content").textContent = "";

@@ -373,12 +373,28 @@ def replace_a_t_text(xml_text: str, escaped_map: dict) -> str:
     return _A_T_PATTERN.sub(repl, xml_text)
 
 
+def _link_key(L: dict) -> tuple:
+    """用 (kind, from, uri/page/to/named) 作为链接去重键，跨 redaction 前后比对。"""
+    fr = L.get("from")
+    fr = tuple(fr) if hasattr(fr, "__iter__") else fr
+    return (L.get("kind"), fr, L.get("uri"), L.get("page"),
+            L.get("to"), L.get("named"), L.get("newwindow"))
+
+
+def _srgb_to_rgb(color: int) -> tuple:
+    """PyMuPDF span color 是 sRGB 整数，转成 0~1 浮点三元组供 redaction text_color 用。"""
+    return (((color >> 16) & 255) / 255,
+            ((color >> 8) & 255) / 255,
+            (color & 255) / 255)
+
+
 def pdf_text_replace(translate_path: str, path: str):
     """
     Replace text in a PDF at the span level via redaction annotations,
-    preserving images and vector graphics. 与 excel/word/ppt 同构：只改
-    span 文本，其余内容原样保留。
-    限制：PDF 文本无自动回流，译文长于原文时可能越界相邻文本（已知取舍）。
+    preserving images, vector graphics, text color and link annotations.
+    与 excel/word/ppt 同构：只改 span 文本，其余内容原样保留。
+    限制：PDF 文本无自动回流，译文长于原文时 PyMuPDF 会自动缩小字号以塞进
+    原 bbox，可能略小于原文（已知取舍，避免越界压到相邻文本）。
     """
     import fitz
     with open(translate_path, "r", encoding="utf-8") as f:
@@ -393,6 +409,9 @@ def pdf_text_replace(translate_path: str, path: str):
     doc = fitz.open(path)
     try:
         for page in doc:
+            # redaction 会删掉与之重叠的链接标注，先快照本页全部链接，apply 后补回。
+            link_snapshot = page.get_links()
+
             # 先收集所有要改的 span，再统一加 redaction 并 apply
             # （apply 会改变页面，必须在收集完成后执行）
             targets = []
@@ -403,13 +422,21 @@ def pdf_text_replace(translate_path: str, path: str):
                     for span in line["spans"]:
                         norm = _normalize(span["text"])
                         if norm in norm_map:
-                            targets.append((span["bbox"], norm_map[norm], span["size"]))
-            for bbox, repl, size in targets:
-                # 译文含 CJK 用内置 CJK 字体，否则拉丁字体
+                            targets.append((span["bbox"], norm_map[norm],
+                                             span["size"], span["color"]))
+            for bbox, repl, size, color in targets:
+                # 译文含 CJK 用内置 CJK 字体，否则拉丁字体；保留原文字色与字号
                 font = "china-s" if _CJK.search(repl) else "helv"
-                page.add_redact_annot(bbox, text=repl, fontsize=size, fontname=font)
+                page.add_redact_annot(bbox, text=repl, fontsize=size, fontname=font,
+                                      text_color=_srgb_to_rgb(color), fill=False)
             # 保留图像：只清除/改写文本，不挖空图片
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+            # 补回 redaction 删掉的链接：快照里仍存活的不动，缺失的重新插入
+            surv_keys = {_link_key(L) for L in page.get_links()}
+            for L in link_snapshot:
+                if _link_key(L) not in surv_keys:
+                    page.insert_link(L)
         doc.save(file_name)
     finally:
         doc.close()
